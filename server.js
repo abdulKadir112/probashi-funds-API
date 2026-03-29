@@ -5,58 +5,73 @@ require('dotenv').config();
 
 const app = express();
 
-// ১. মিডেলওয়্যার (অবশ্যই সবার উপরে দিন)
+// মিডেলওয়্যার
 app.use(cors({ origin: '*' })); 
 app.use(express.json());
 
-// ২. মঙ্গোডিবি কানেকশন
+// মঙ্গোডিবি কানেকশন
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log("✅ MongoDB Connected!"))
   .catch(err => console.error("❌ DB Error:", err));
 
-// ৩. ট্রানজেকশন স্কিমা
+// ট্রানজেকশন স্কিমা
 const transactionSchema = new mongoose.Schema({
-  fundType: { type: String, required: true }, 
+  fundId: { type: String, required: true }, // এটি asahay-sahajjo, iftaar-tohobil ইত্যাদি হবে
   type: { type: String, enum: ['donation', 'expense'], required: true },
   amount: { type: Number, required: true },
   donorName: String,
-  donorPhone: String,
-  donorAddress: String,
   receiverName: String,
-  receiverPhone: String,
-  receiverAddress: String,
+  phone: String,
   note: String,
   date: { type: Date, default: Date.now }
-});
+}, { timestamps: true });
 
 const Transaction = mongoose.model('Transaction', transactionSchema);
 
-// --- রাউটস (Routes) ---
+// --- API Routes ---
 
-// ৪. ডাটা ফেচ করা (GET)
+// ১. নির্দিষ্ট ফান্ডের ডাটা দেখা (GET)
 app.get('/api/:fundName', async (req, res) => {
   try {
-    const data = await Transaction.find({ fundType: req.params.fundName }).sort({ date: -1 });
+    const { fundName } = req.params;
+    // ডাটাবেস থেকে শুধু ওই ফান্ডের ডাটা ফিল্টার করে আনা হচ্ছে
+    const data = await Transaction.find({ fundId: fundName }).sort({ date: -1 });
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ৫. নতুন ডাটা সেভ করা (POST)
+// ২. নতুন ডাটা সেভ করা (POST)
 app.post('/api/:fundName', async (req, res) => {
   try {
+    const { fundName } = req.params;
     const newEntry = new Transaction({ 
       ...req.body, 
-      fundType: req.params.fundName 
+      fundId: fundName // URL থেকে নাম নিয়ে ডাটাবেসে সেভ হচ্ছে
     });
     await newEntry.save();
     res.status(201).json(newEntry);
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
-// ৬. ডাটা ডিলিট করা (DELETE)
+// ৩. ডাটা আপডেট করা (PUT)
+app.put('/api/:fundName/:id', async (req, res) => {
+  try {
+    const { id, fundName } = req.params;
+    const updatedData = await Transaction.findByIdAndUpdate(
+      id,
+      { ...req.body, fundId: fundName },
+      { new: true }
+    );
+    if (!updatedData) return res.status(404).json({ message: "Data not found" });
+    res.json(updatedData);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// ৪. ডাটা ডিলিট করা (DELETE)
 app.delete('/api/:fundName/:id', async (req, res) => {
   try {
-    await Transaction.findByIdAndDelete(req.params.id);
+    const deletedRecord = await Transaction.findByIdAndDelete(req.params.id);
+    if (!deletedRecord) return res.status(404).json({ message: "Not found" });
     res.json({ message: "Deleted Successfully" });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
