@@ -1,6 +1,7 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const axios = require('axios'); // Self-ping এর জন্য axios যুক্ত করা হয়েছে
 require('dotenv').config();
 
 const app = express();
@@ -16,7 +17,7 @@ mongoose.connect(process.env.MONGODB_URI)
 
 // ট্রানজেকশন স্কিমা
 const transactionSchema = new mongoose.Schema({
-  fundId: { type: String, required: true }, // এটি asahay-sahajjo, iftaar-tohobil ইত্যাদি হবে
+  fundId: { type: String, required: true }, 
   type: { type: String, enum: ['donation', 'expense'], required: true },
   amount: { type: Number, required: true },
   donorName: String,
@@ -30,30 +31,34 @@ const Transaction = mongoose.model('Transaction', transactionSchema);
 
 // --- API Routes ---
 
-// ১. নির্দিষ্ট ফান্ডের ডাটা দেখা (GET)
+// ১. সার্ভার চেক করার জন্য পিং রুট (Keep Alive Route)
+app.get('/ping', (req, res) => {
+  res.status(200).send("Server is Alive!");
+});
+
+// ২. নির্দিষ্ট ফান্ডের ডাটা দেখা (GET)
 app.get('/api/:fundName', async (req, res) => {
   try {
     const { fundName } = req.params;
-    // ডাটাবেস থেকে শুধু ওই ফান্ডের ডাটা ফিল্টার করে আনা হচ্ছে
     const data = await Transaction.find({ fundId: fundName }).sort({ date: -1 });
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ২. নতুন ডাটা সেভ করা (POST)
+// ৩. নতুন ডাটা সেভ করা (POST)
 app.post('/api/:fundName', async (req, res) => {
   try {
     const { fundName } = req.params;
     const newEntry = new Transaction({ 
       ...req.body, 
-      fundId: fundName // URL থেকে নাম নিয়ে ডাটাবেসে সেভ হচ্ছে
+      fundId: fundName 
     });
     await newEntry.save();
     res.status(201).json(newEntry);
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
-// ৩. ডাটা আপডেট করা (PUT)
+// ৪. ডাটা আপডেট করা (PUT)
 app.put('/api/:fundName/:id', async (req, res) => {
   try {
     const { id, fundName } = req.params;
@@ -67,7 +72,7 @@ app.put('/api/:fundName/:id', async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
-// ৪. ডাটা ডিলিট করা (DELETE)
+// ৫. ডাটা ডিলিট করা (DELETE)
 app.delete('/api/:fundName/:id', async (req, res) => {
   try {
     const deletedRecord = await Transaction.findByIdAndDelete(req.params.id);
@@ -76,5 +81,16 @@ app.delete('/api/:fundName/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// --- Keep Alive Logic ---
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+
+  // প্রতি ১০ মিনিট পর পর সার্ভার নিজেকে পিং করবে যেন রেন্ডার স্লিপ না করে
+  setInterval(() => {
+    axios.get(`https://probashi-funds-api.onrender.com/ping`)
+      .then(() => console.log('Keep-alive: Ping Success!'))
+      .catch(err => console.log('Keep-alive: Ping Failed!', err.message));
+  }, 600000); // ৬০০,০০০ মিলি-সেকেন্ড = ১০ মিনিট
+});
