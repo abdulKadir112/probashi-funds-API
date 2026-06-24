@@ -15,16 +15,16 @@ mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log("✅ MongoDB Connected!"))
   .catch(err => console.error("❌ DB Error:", err));
 
-// ট্রানজেকশন স্কিমা (এখানে আবেদন ফর্মের প্রয়োজনীয় নতুন ফিল্ডগুলো যুক্ত করা হয়েছে)
+// ট্রানজেকশন স্কিমা
 const transactionSchema = new mongoose.Schema({
   fundId: { type: String, required: true }, 
   type: { type: String, enum: ['donation', 'expense'], required: true },
   amount: { type: Number, required: true },
   donorName: String,
   receiverName: String,
-  receiverPhone: String,    // <-- নতুন যুক্ত করা হলো
-  receiverAddress: String,  // <-- নতুন যুক্ত করা হলো
-  status: { type: String, default: 'approved' }, // <-- নতুন যুক্ত (Default: approved, আবেদনের জন্য হবে 'pending')
+  receiverPhone: String,    
+  receiverAddress: String,  
+  status: { type: String, default: 'approved' }, // Default: approved, আবেদনের জন্য হবে 'pending'
   phone: String,
   note: String,
   date: { type: Date, default: Date.now }
@@ -39,28 +39,10 @@ app.get('/ping', (req, res) => {
   res.status(200).send("Server is Alive!");
 });
 
-// ==========================================
-// 🆕 নতুন ডেডিকেটেড রাউট: সহায়তার আবেদনের জন্য (অ্যাডমিন অনুমোদনের জন্য)
-// এই রাউটে ডাটা পাঠালে সরাসরি status: 'pending' হিসেবে সেভ হবে
-// ==========================================
-app.post('/api/applications', async (req, res) => {
-  try {
-    const newApplication = new Transaction({
-      ...req.body,
-      status: 'pending' // এটি নিশ্চিত করবে যে আবেদনটি সরাসরি ড্যাশবোর্ডে যোগ হবে না, পেন্ডিং থাকবে
-    });
-    await newApplication.save();
-    res.status(201).json({ message: 'আবেদনটি সফলভাবে পেন্ডিং লিস্টে জমা হয়েছে।', data: newApplication });
-  } catch (err) { 
-    res.status(400).json({ error: err.message }); 
-  }
-});
-
-// ২. নির্দিষ্ট ফান্ডের ডাটা দেখা (GET)
+// ২. নির্দিষ্ট ফান্ডের ডাটা দেখা (GET) - শুধুমাত্র approved ডাটা ড্যাশবোর্ডে যাবে
 app.get('/api/:fundName', async (req, res) => {
   try {
     const { fundName } = req.params;
-    // এখানে শুধুমাত্র approved ডাটাগুলো ড্যাশবোর্ডের মেইন ক্যালকুলেশনে যাবে
     const data = await Transaction.find({ fundId: fundName, status: { $ne: 'pending' } }).sort({ date: -1 });
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -102,6 +84,71 @@ app.delete('/api/:fundName/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+
+// =========================================================================
+// 🆕 নতুন যুক্ত করা রাউটস: আবেদন সাবমিট, পেন্ডিং দেখা, এক্সেপ্ট এবং রিজেক্ট লজিক
+// =========================================================================
+
+// ক. নতুন আবেদনের জন্য সাধারণ রুট (পাবলিক ফর্ম থেকে সাবমিট করার জন্য)
+app.post('/api/applications', async (req, res) => {
+  try {
+    const newApplication = new Transaction({
+      ...req.body,
+      status: 'pending' // সরাসরি পেন্ডিং লিস্টে জমা হবে
+    });
+    await newApplication.save();
+    res.status(201).json({ message: 'আবেদনটি সফলভাবে পেন্ডিং লিস্টে জমা হয়েছে।', data: newApplication });
+  } catch (err) { 
+    res.status(400).json({ error: err.message }); 
+  }
+});
+
+// খ. নির্দিষ্ট ফান্ডের পেন্ডিং আবেদনগুলো দেখার রুট (GET)
+// উদাহরণ: /api/asahay-sahajjo/pending বা /api/applications?status=pending সব একসাথে দেখতে
+app.get('/api/:fundName/pending', async (req, res) => {
+  try {
+    const { fundName } = req.params;
+    // নির্দিষ্ট ফান্ডের শুধুমাত্র pending স্ট্যাটাসের ডাটা ফিল্টার করবে
+    const pendingData = await Transaction.find({ fundId: fundName, status: 'pending' }).sort({ createdAt: -1 });
+    res.json(pendingData);
+  } catch (err) { 
+    res.status(500).json({ error: err.message }); 
+  }
+});
+
+// গ. আবেদন অনুমোদন (Approve) করার রুট (POST)
+// স্ট্যাটাস 'pending' থেকে 'approved' এ পরিবর্তন হবে এবং মেইন ড্যাশবোর্ড ক্যালকুলেশনে ঢুকে যাবে
+app.post('/api/:fundName/pending/:id/approve', async (req, res) => {
+  try {
+    const { id, fundName } = req.params;
+    const approvedApplication = await Transaction.findByIdAndUpdate(
+      id,
+      { status: 'approved', fundId: fundName }, // স্ট্যাটাস পরিবর্তন ও ফান্ড নিশ্চিত করা
+      { new: true }
+    );
+    if (!approvedApplication) return res.status(404).json({ message: "আবেদনটি খুঁজে পাওয়া যায়নি।" });
+    res.json({ message: "আবেদনটি সফলভাবে অনুমোদন করা হয়েছে।", data: approvedApplication });
+  } catch (err) { 
+    res.status(400).json({ error: err.message }); 
+  }
+});
+
+// ঘ. আবেদন বাতিল (Reject/Delete) করার রুট (DELETE)
+// আবেদনটি ডাটাবেজ থেকে সম্পূর্ণ মুছে ফেলা হবে অথবা আপনি চাইলে status: 'rejected' করতে পারেন (এখানে ডিলিট করে দেওয়া হয়েছে)
+app.delete('/api/:fundName/pending/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const rejectedApplication = await Transaction.findByIdAndDelete(id);
+    if (!rejectedApplication) return res.status(404).json({ message: "আবেদনটি খুঁজে পাওয়া যায়নি।" });
+    res.json({ message: "আবেদনটি সফলভাবে বাতিল বা মুছে ফেলা হয়েছে।" });
+  } catch (err) { 
+    res.status(500).json({ error: err.message }); 
+  }
+});
+
+// ==========================================
+
+
 // --- Keep Alive Logic ---
 const PORT = process.env.PORT || 5000;
 
@@ -113,5 +160,5 @@ app.listen(PORT, () => {
     axios.get(`https://probashi-funds-api.onrender.com/ping`)
       .then(() => console.log('Keep-alive: Ping Success!'))
       .catch(err => console.log('Keep-alive: Ping Failed!', err.message));
-  }, 600000); // ৬০০,০০০ মিলি-সেকেন্ড = ১০ মিনিট
+  }, 600000); // ৬০০,০০০ মিলি-সেকেন্ড = ১০ মিনিট  
 });
