@@ -41,14 +41,18 @@ app.get('/ping', (req, res) => {
   res.status(200).send("Server is Alive!");
 });
 
-// নির্দিষ্ট ফান্ডের শুধুমাত্র Approved ডাটা দেখা (যা সরাসরি ড্যাশবোর্ড ক্যালকুলেশনে যাবে)
+// ফিক্সড রুট ২: পুরোনো ডেটা এবং অনুমোদিত ডেটা একসাথে দেখানোর জন্য
 app.get('/api/:fundName', async (req, res) => {
   try {
     const { fundName } = req.params;
+    
+    // লজিক ফিক্স: যেসব ডেটায় status ফিল্ড নেই (পুরোনো ডেটা) অথবা status এর মান 'approved' 
+    // এবং status কোনোভাবেই 'pending' বা 'rejected' নয়—সেগুলো সবই আসবে।
     const data = await Transaction.find({ 
-      fundId: fundName, 
-      status: 'approved' // শুধু অনুমোদিত হিসাব ড্যাশবোর্ডে যাবে
+      fundId: fundName,
+      status: { $nin: ['pending', 'rejected'] } 
     }).sort({ date: -1 });
+    
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -60,7 +64,7 @@ app.post('/api/:fundName', async (req, res) => {
     const newEntry = new Transaction({ 
       ...req.body, 
       fundId: fundName,
-      status: 'approved' // ড্যাশবোর্ডের এন্ট্রি সরাসরি approved হবে
+      status: 'approved' 
     });
     await newEntry.save();
     res.status(201).json(newEntry);
@@ -100,7 +104,7 @@ app.post('/api/applications', async (req, res) => {
   try {
     const newApplication = new Transaction({
       ...req.body,
-      status: 'pending' // ডিফল্ট পেন্ডিং থাকবে
+      status: 'pending' 
     });
     await newApplication.save();
     res.status(201).json({ message: 'আবেদনটি সফলভাবে পেন্ডিং লিস্টে জমা হয়েছে।', data: newApplication });
@@ -109,15 +113,18 @@ app.post('/api/applications', async (req, res) => {
   }
 });
 
-// খ. নির্দিষ্ট ফান্ডের সব ধরনের আবেদন (Pending, Approved, Rejected) একসাথে দেখার রুট
+// ফিক্সড রুট খ: পেন্ডিং ও অন্যান্য অ্যাপ্লিকেশনের ডেটা পাওয়ার রুট
 app.get('/api/:fundName/pending', async (req, res) => {
   try {
     const { fundName } = req.params;
-    // ফ্রন্টএন্ডের সুবিধার জন্য সব রিকোয়েস্ট একসাথে পাঠানো হচ্ছে, ফ্রন্টএন্ড স্টেট অনুযায়ী ফিল্টার করবে
+    
+    // অনেক সময় ফ্রন্টএন্ডে সরাসরি 'pending' অবজেক্ট খোঁজা হয়। 
+    // তাই স্পষ্ট করে pending, approved, rejected স্ট্যাটাসের সব ডেটা পাঠানো হচ্ছে।
     const pendingData = await Transaction.find({ 
       fundId: fundName,
       status: { $in: ['pending', 'approved', 'rejected'] }
     }).sort({ createdAt: -1 });
+    
     res.json(pendingData);
   } catch (err) { 
     res.status(500).json({ error: err.message }); 
@@ -125,7 +132,6 @@ app.get('/api/:fundName/pending', async (req, res) => {
 });
 
 // গ. পেন্ডিং আবেদন এডিট (Edit) করার রুট 
-// অ্যাডমিন অনুমোদন করার আগে চাইলে টাকার পরিমাণ বা অন্য তথ্য পরিবর্তন করতে পারবেন
 app.put('/api/:fundName/pending/:id', async (req, res) => {
   try {
     const { id, fundName } = req.params;
@@ -142,11 +148,10 @@ app.put('/api/:fundName/pending/:id', async (req, res) => {
 });
 
 // ঘ. আবেদন অনুমোদন (Approve) করার রুট
-// স্ট্যাটাস 'approved' হবে এবং এটি ড্যাশবোর্ডের মূল ব্যালেন্সে যুক্ত হয়ে যাবে
 app.post('/api/:fundName/pending/:id/approve', async (req, res) => {
   try {
     const { id, fundName } = req.params;
-    const { amount } = req.body; // যদি ফ্রন্টএন্ড থেকে এডিটেড অ্যামাউন্ট আসে
+    const { amount } = req.body; 
 
     const updateFields = { status: 'approved', fundId: fundName };
     if (amount) updateFields.amount = Number(amount);
@@ -164,7 +169,6 @@ app.post('/api/:fundName/pending/:id/approve', async (req, res) => {
 });
 
 // ঙ. আবেদন বাতিল (Reject) করার রুট
-// ডাটা মুছে না ফেলে স্ট্যাটাস 'rejected' করা হবে যাতে অ্যাডমিন প্যানেলে হিস্ট্রি থাকে
 app.post('/api/:fundName/pending/:id/reject', async (req, res) => {
   try {
     const { id, fundName } = req.params;
@@ -200,7 +204,6 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 
-  // প্রতি ১০ মিনিট পর পর সার্ভার নিজেকে পিং করবে যেন রেন্ডার স্লিপ না করে
   setInterval(() => {
     axios.get(`https://probashi-funds-api.onrender.com/ping`)
       .then(() => console.log('Keep-alive: Ping Success!'))
