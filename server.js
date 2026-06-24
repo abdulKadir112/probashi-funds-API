@@ -1,28 +1,30 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const axios = require('axios');
+const axios = require('axios'); // Self-ping এর জন্য axios যুক্ত করা হয়েছে
 require('dotenv').config();
 
 const app = express();
 
+// মিডেলওয়্যার
 app.use(cors({ origin: '*' })); 
 app.use(express.json());
 
+// মঙ্গোডিবি কানেকশন
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log("✅ MongoDB Connected!"))
   .catch(err => console.error("❌ DB Error:", err));
 
-// ট্রানজেকশন স্কিমা
+// ট্রানজেকশন স্কিমা (এখানে আবেদন ফর্মের প্রয়োজনীয় নতুন ফিল্ডগুলো যুক্ত করা হয়েছে)
 const transactionSchema = new mongoose.Schema({
   fundId: { type: String, required: true }, 
   type: { type: String, enum: ['donation', 'expense'], required: true },
   amount: { type: Number, required: true },
   donorName: String,
   receiverName: String,
-  receiverPhone: String,    
-  receiverAddress: String,  
-  status: { type: String, default: 'approved' }, 
+  receiverPhone: String,    // <-- নতুন যুক্ত করা হলো
+  receiverAddress: String,  // <-- নতুন যুক্ত করা হলো
+  status: { type: String, default: 'approved' }, // <-- নতুন যুক্ত (Default: approved, আবেদনের জন্য হবে 'pending')
   phone: String,
   note: String,
   date: { type: Date, default: Date.now }
@@ -32,86 +34,52 @@ const Transaction = mongoose.model('Transaction', transactionSchema);
 
 // --- API Routes ---
 
+// ১. সার্ভার চেক করার জন্য পিং রুট (Keep Alive Route)
 app.get('/ping', (req, res) => {
   res.status(200).send("Server is Alive!");
 });
 
-// ১. নতুন অ্যাপ্লিকেশনের জন্য রুট (Pending হিসেবে জমা হবে)
+// ==========================================
+// 🆕 নতুন ডেডিকেটেড রাউট: সহায়তার আবেদনের জন্য (অ্যাডমিন অনুমোদনের জন্য)
+// এই রাউটে ডাটা পাঠালে সরাসরি status: 'pending' হিসেবে সেভ হবে
+// ==========================================
 app.post('/api/applications', async (req, res) => {
   try {
     const newApplication = new Transaction({
       ...req.body,
-      status: 'pending' 
+      status: 'pending' // এটি নিশ্চিত করবে যে আবেদনটি সরাসরি ড্যাশবোর্ডে যোগ হবে না, পেন্ডিং থাকবে
     });
     await newApplication.save();
-    res.status(201).json({ message: 'আবেদনটি সফলভাবে পেন্ডিং লিস্টে জমা হয়েছে।', data: newApplication });
+    res.status(201).json({ message: 'আবেদনটি সফলভাবে পেন্ডিং লিস্টে জমা হয়েছে।', data: newApplication });
   } catch (err) { 
     res.status(400).json({ error: err.message }); 
   }
 });
 
-// ২. [নতুন যুক্ত করা হলো] নির্দিষ্ট ফান্ডের পেন্ডিং রিকোয়েস্টগুলো দেখার রুট
-app.get('/api/:fundName/pending', async (req, res) => {
-  try {
-    const { fundName } = req.params;
-    const pendingData = await Transaction.find({ fundId: fundName, status: 'pending' }).sort({ createdAt: -1 });
-    res.json(pendingData);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ৩. [নতুন যুক্ত করা হলো] পেন্ডিং আবেদন অনুমোদন (Approve) করার রুট
-app.post('/api/:fundName/pending/:id/approve', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const approvedTx = await Transaction.findByIdAndUpdate(
-      id,
-      { status: 'approved' },
-      { new: true }
-    );
-    if (!approvedTx) return res.status(404).json({ message: "Application not found" });
-    res.json({ message: "Approved successfully", data: approvedTx });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-// ৪. [নতুন যুক্ত করা হলো] পেন্ডিং আবেদন বাতিল (Reject/Delete) করার রুট
-app.delete('/api/:fundName/pending/:id', async (req, res) => {
-  try {
-    const deletedRecord = await Transaction.findByIdAndDelete(req.params.id);
-    if (!deletedRecord) return res.status(404).json({ message: "Application not found" });
-    res.json({ message: "Rejected and Deleted Successfully" });
-  } catch (err) { 
-    res.status(500).json({ error: err.message }); 
-  }
-});
-
-// ৫. নির্দিষ্ট ফান্ডের শুধুমাত্র Approved ডাটা দেখা (ড্যাশবোর্ড মেইন ক্যালকুলেশন)
+// ২. নির্দিষ্ট ফান্ডের ডাটা দেখা (GET)
 app.get('/api/:fundName', async (req, res) => {
   try {
     const { fundName } = req.params;
-    const data = await Transaction.find({ fundId: fundName, status: 'approved' }).sort({ date: -1 });
+    // এখানে শুধুমাত্র approved ডাটাগুলো ড্যাশবোর্ডের মেইন ক্যালকুলেশনে যাবে
+    const data = await Transaction.find({ fundId: fundName, status: { $ne: 'pending' } }).sort({ date: -1 });
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ৬. নতুন ডিরেক্ট ডাটা সেভ করা (যেমন: অ্যাডমিন নিজে খরচ বা অনুদান এন্ট্রি দিলে)
+// ৩. নতুন ডাটা সেভ করা (POST)
 app.post('/api/:fundName', async (req, res) => {
   try {
     const { fundName } = req.params;
     const newEntry = new Transaction({ 
       ...req.body, 
-      fundId: fundName,
-      status: 'approved' // সরাসরি এন্ট্রি দিলে অনুমোদিত থাকবে
+      fundId: fundName 
     });
     await newEntry.save();
     res.status(201).json(newEntry);
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
-// ৭. ডাটা আপডেট করা
+// ৪. ডাটা আপডেট করা (PUT)
 app.put('/api/:fundName/:id', async (req, res) => {
   try {
     const { id, fundName } = req.params;
@@ -125,7 +93,7 @@ app.put('/api/:fundName/:id', async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
-// ৮. এপ্রুভড ডাটা ডিলিট করা
+// ৫. ডাটা ডিলিট করা (DELETE)
 app.delete('/api/:fundName/:id', async (req, res) => {
   try {
     const deletedRecord = await Transaction.findByIdAndDelete(req.params.id);
@@ -136,11 +104,14 @@ app.delete('/api/:fundName/:id', async (req, res) => {
 
 // --- Keep Alive Logic ---
 const PORT = process.env.PORT || 5000;
+
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
+
+  // প্রতি ১০ মিনিট পর পর সার্ভার নিজেকে পিং করবে যেন রেন্ডার স্লিপ না করে
   setInterval(() => {
     axios.get(`https://probashi-funds-api.onrender.com/ping`)
       .then(() => console.log('Keep-alive: Ping Success!'))
       .catch(err => console.log('Keep-alive: Ping Failed!', err.message));
-  }, 600000); 
+  }, 600000); // ৬০০,০০০ মিলি-সেকেন্ড = ১০ মিনিট
 });
