@@ -26,7 +26,7 @@ const transactionSchema = new mongoose.Schema({
   receiverAddress: String,
   phone: String,
   note: String,
-  status: { type: String, default: 'approved', enum: ['pending', 'approved', 'rejected'] },
+  status: { type: String, default: 'pending', enum: ['pending', 'approved', 'rejected'] },
   date: { type: Date, default: Date.now }
 }, { timestamps: true });
 
@@ -36,12 +36,11 @@ const Transaction = mongoose.model('Transaction', transactionSchema);
 
 app.get('/ping', (req, res) => res.status(200).send("Server is Alive!"));
 
-// সব ট্রানজেকশন (approved + pending + rejected) — ফান্ড অনুসারে
+// সব ট্রানজেকশন ফান্ড অনুসারে
 app.get('/api/:fundName', async (req, res) => {
   try {
     const { fundName } = req.params;
-    const data = await Transaction.find({ fundId: fundName })
-      .sort({ createdAt: -1 });
+    const data = await Transaction.find({ fundId: fundName }).sort({ createdAt: -1 });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -66,10 +65,14 @@ app.post('/api/:fundName', async (req, res) => {
 
 // ====================== APPLICATION / PENDING ROUTES ======================
 
-// পাবলিক আবেদন জমা
+// পাবলিক আবেদন জমা (Pending)
 app.post('/api/applications', async (req, res) => {
   try {
-    const newApp = new Transaction({ ...req.body, status: 'pending' });
+    const newApp = new Transaction({ 
+      ...req.body, 
+      status: 'pending',
+      fundId: req.body.fundId || 'asahay-sahajjo'
+    });
     await newApp.save();
     res.status(201).json({ message: 'আবেদন সফলভাবে জমা হয়েছে', data: newApp });
   } catch (err) {
@@ -77,7 +80,7 @@ app.post('/api/applications', async (req, res) => {
   }
 });
 
-// **নতুন ফিক্সড রুট** — সব আবেদন (pending + approved + rejected)
+// সব আবেদন (Pending + Approved + Rejected)
 app.get('/api/applications', async (req, res) => {
   try {
     const data = await Transaction.find({ status: { $in: ['pending', 'approved', 'rejected'] } })
@@ -88,7 +91,7 @@ app.get('/api/applications', async (req, res) => {
   }
 });
 
-// ফান্ড অনুসারে পেন্ডিং + অন্যান্য
+// ফান্ড অনুসারে সব আবেদন (Pending + Approved + Rejected)
 app.get('/api/:fundName/pending', async (req, res) => {
   try {
     const { fundName } = req.params;
